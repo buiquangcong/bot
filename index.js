@@ -493,12 +493,13 @@ client.on('interactionCreate', async interaction => {
                     
                     // Cập nhật Embed với thông tin mặc định khi gặp lỗi lấy metadata
                     const fallbackEmbed = new EmbedBuilder()
-                        .setColor('#2ECC71')
-                        .setTitle('🎵 Đang phát nhạc từ YouTube')
+                        .setColor('#E74C3C')
+                        .setTitle('🎵 Đang phát nhạc từ YouTube (Lỗi tải thông tin)')
                         .setDescription(`**[Video YouTube](${url})**`)
                         .addFields(
                             { name: '⏱️ Thời lượng', value: '`Không rõ`', inline: true },
-                            { name: '🎤 Kênh thoại', value: `<#${voiceChannel.id}>`, inline: true }
+                            { name: '🎤 Kênh thoại', value: `<#${voiceChannel.id}>`, inline: true },
+                            { name: '⚠️ Chi tiết lỗi', value: `\`${err.message || err}\``.substring(0, 1024), inline: false }
                         )
                         .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` })
                         .setTimestamp();
@@ -508,7 +509,7 @@ client.on('interactionCreate', async interaction => {
 
             } catch (error) {
                 console.error('❌ Lỗi khi phát nhạc:', error);
-                await interaction.editReply({ content: '❌ Gặp lỗi trong quá trình kết nối hoặc lấy stream từ YouTube!' });
+                await interaction.editReply({ content: `❌ Gặp lỗi trong quá trình kết nối hoặc lấy stream từ YouTube!\nChi tiết lỗi: \`${error.message || error}\`` });
             }
         }
 
