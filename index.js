@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, REST, Routes, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, REST, Routes, ActivityType, Events, PermissionFlagsBits } = require('discord.js');
 
 // Khởi tạo client với các quyền (Intents) cần thiết
 const client = new Client({
@@ -41,7 +41,7 @@ const commands = [
 function findWelcomeChannel(guild) {
     // 1. Ưu tiên kênh hệ thống (System Channel) nếu bot có quyền gửi tin nhắn
     const systemChannel = guild.systemChannel;
-    if (systemChannel && systemChannel.permissionsFor(guild.members.me).has('SendMessages')) {
+    if (systemChannel && systemChannel.permissionsFor(guild.members.me).has(PermissionFlagsBits.SendMessages)) {
         return systemChannel;
     }
 
@@ -50,16 +50,16 @@ function findWelcomeChannel(guild) {
     const textChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText);
     
     for (const keyword of keywords) {
-        const found = textChannels.find(c => c.name.toLowerCase().includes(keyword) && c.permissionsFor(guild.members.me).has('SendMessages'));
+        const found = textChannels.find(c => c.name.toLowerCase().includes(keyword) && c.permissionsFor(guild.members.me).has(PermissionFlagsBits.SendMessages));
         if (found) return found;
     }
 
     // 3. Nếu không tìm thấy, lấy kênh văn bản đầu tiên mà bot có quyền gửi tin nhắn
-    return textChannels.find(c => c.permissionsFor(guild.members.me).has('SendMessages'));
+    return textChannels.find(c => c.permissionsFor(guild.members.me).has(PermissionFlagsBits.SendMessages));
 }
 
 // Khi bot sẵn sàng hoạt động
-client.once('clientReady', async () => {
+client.once(Events.ClientReady, async () => {
     console.log(`🤖 Bot ${client.user.tag} đã online và sẵn sàng hoạt động!`);
     
     // Thiết lập trạng thái hoạt động xịn sò
@@ -225,7 +225,7 @@ client.on('interactionCreate', async interaction => {
 // Đăng nhập bot bằng Token từ file .env
 const token = process.env.DISCORD_TOKEN ? process.env.DISCORD_TOKEN.trim() : null;
 if (!token || token === 'YOUR_DISCORD_BOT_TOKEN_HERE' || token === '') {
-    console.error('❌ LỖI: Vui lòng cấu hình DISCORD_TOKEN chính xác trong file .env trước khi chạy bot!');
+    console.error('❌ LỖI: Vui lòng cấu hình DISCORD_TOKEN trong file .env (hoặc Environment Variables của Railway) trước khi chạy bot!');
     process.exit(1);
 }
 
