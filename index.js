@@ -6,6 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
+// Thiết lập đường dẫn FFmpeg từ ffmpeg-static để @discordjs/voice tự động tìm thấy
+process.env.FFMPEG_PATH = require('ffmpeg-static');
+
 // Khởi tạo client với các quyền (Intents) cần thiết
 const client = new Client({
     intents: [
@@ -485,6 +488,20 @@ client.on('interactionCreate', async interaction => {
                     });
                 }).catch(err => {
                     console.error('❌ Lỗi khi lấy metadata video:', err);
+                    
+                    // Cập nhật Embed với thông tin mặc định khi gặp lỗi lấy metadata
+                    const fallbackEmbed = new EmbedBuilder()
+                        .setColor('#2ECC71')
+                        .setTitle('🎵 Đang phát nhạc từ YouTube')
+                        .setDescription(`**[Video YouTube](${url})**`)
+                        .addFields(
+                            { name: '⏱️ Thời lượng', value: '`Không rõ`', inline: true },
+                            { name: '🎤 Kênh thoại', value: `<#${voiceChannel.id}>`, inline: true }
+                        )
+                        .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` })
+                        .setTimestamp();
+                        
+                    interaction.editReply({ content: null, embeds: [fallbackEmbed] }).catch(e => {});
                 });
 
             } catch (error) {
