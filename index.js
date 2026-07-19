@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, REST, Routes, ActivityType, Events, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, REST, Routes, ActivityType, Events, PermissionFlagsBits, StringSelectMenuBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus, StreamType } = require('@discordjs/voice');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
@@ -105,7 +105,7 @@ function formatDuration(seconds) {
 function getYouTubeMetadata(url) {
     return new Promise((resolve, reject) => {
         const binPath = getYtDlpPath();
-        execFile(binPath, ['--dump-json', '--js-runtimes', 'node', url], (error, stdout, stderr) => {
+        execFile(binPath, ['--dump-json', '--js-runtimes', 'node', url], { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(error);
             }
@@ -182,6 +182,10 @@ const commands = [
                 required: false
             }
         ]
+    },
+    {
+        name: 'menu',
+        description: 'Hiển thị menu tương tác các chức năng của bot 🎛️',
     }
 ];
 
@@ -575,6 +579,55 @@ client.on('interactionCreate', async interaction => {
                 await interaction.editReply({ content: '❌ Gặp lỗi khi cố gắng ban thành viên này!' });
             }
         }
+        
+        else if (commandName === 'menu') {
+            const embed = new EmbedBuilder()
+                .setColor('#9B59B6')
+                .setTitle('🎛️ MENU TƯƠNG TÁC GÂU GÂU BOT')
+                .setDescription('Chào mừng bạn đến với bảng điều khiển của **Gâu Gâu Bot**! Hãy chọn danh mục phía dưới để xem chi tiết các chức năng hoặc tương tác trực tiếp.')
+                .setThumbnail(client.user.displayAvatarURL())
+                .addFields(
+                    { name: '🎵 Âm Nhạc', value: 'Phát nhạc từ YouTube chất lượng cao vào phòng thoại.', inline: true },
+                    { name: '📊 Tiện Ích', value: 'Kiểm tra độ trễ (Ping), thông tin Server, User.', inline: true },
+                    { name: '🛡️ Quản Trị', value: 'Các công cụ ban, quản lý server.', inline: true }
+                )
+                .setFooter({ text: 'Hệ thống menu thông minh • Gâu Gâu' })
+                .setTimestamp();
+
+            const selectMenu = new StringSelectMenuBuilder()
+                .setCustomId('menu_select')
+                .setPlaceholder('Chọn danh mục chức năng tại đây...')
+                .addOptions([
+                    {
+                        label: 'Điều khiển Âm Nhạc',
+                        description: 'Xem lệnh và điều khiển phát nhạc YouTube',
+                        value: 'menu_music',
+                        emoji: '🎵'
+                    },
+                    {
+                        label: 'Thông tin & Tiện ích',
+                        description: 'Xem thông tin server, thành viên, đo độ trễ',
+                        value: 'menu_info',
+                        emoji: '📊'
+                    },
+                    {
+                        label: 'Công cụ Quản trị',
+                        description: 'Các chức năng ban/kick thành viên',
+                        value: 'menu_mod',
+                        emoji: '🛡️'
+                    },
+                    {
+                        label: 'Hướng dẫn & Trợ giúp',
+                        description: 'Xem toàn bộ phím tắt và hướng dẫn sử dụng',
+                        value: 'menu_help',
+                        emoji: '📖'
+                    }
+                ]);
+
+            const row = new ActionRowBuilder().addComponents(selectMenu);
+
+            await interaction.reply({ embeds: [embed], components: [row] });
+        }
     } catch (error) {
         console.error(`❌ Lỗi khi xử lý lệnh ${commandName}:`, error);
         const errorMessage = { content: '❌ Đã xảy ra lỗi khi thực thi lệnh này!', ephemeral: true };
@@ -583,6 +636,141 @@ client.on('interactionCreate', async interaction => {
         } else {
             await interaction.reply(errorMessage);
         }
+    }
+});
+
+// Xử lý các Component Interactions (Select Menu, Nút bấm)
+client.on('interactionCreate', async interaction => {
+    try {
+        if (interaction.isStringSelectMenu()) {
+            const { customId, values } = interaction;
+            if (customId === 'menu_select') {
+                const selection = values[0];
+                
+                let embed;
+                let rows = [];
+
+                if (selection === 'menu_music') {
+                    embed = new EmbedBuilder()
+                        .setColor('#2ECC71')
+                        .setTitle('🎵 DANH MỤC ÂM NHẠC')
+                        .setDescription('Bot hỗ trợ phát nhạc từ YouTube chất lượng cực cao thông qua cơ chế giải mã thông minh.')
+                        .addFields(
+                            { name: 'Lệnh `/play [link]`', value: 'Tham gia kênh thoại và bắt đầu phát nhạc từ YouTube.' },
+                            { name: 'Lệnh `/stop`', value: 'Dừng nhạc ngay lập tức và đưa bot rời khỏi phòng voice.' }
+                        )
+                        .setFooter({ text: 'Danh mục: Âm Nhạc' })
+                        .setTimestamp();
+
+                    // Nút bấm dừng nhạc nhanh
+                    const stopButton = new ButtonBuilder()
+                        .setCustomId('btn_stop')
+                        .setLabel('Dừng nhạc (Stop)')
+                        .setStyle(ButtonStyle.Danger)
+                        .setEmoji('⏹️');
+
+                    const row = new ActionRowBuilder().addComponents(stopButton);
+                    rows.push(row);
+                } 
+                else if (selection === 'menu_info') {
+                    embed = new EmbedBuilder()
+                        .setColor('#3498DB')
+                        .setTitle('📊 DANH MỤC TIỆN ÍCH & THÔNG TIN')
+                        .setDescription('Các lệnh kiểm tra thông tin và kiểm tra hiệu năng hệ thống.')
+                        .addFields(
+                            { name: 'Lệnh `/ping`', value: '⚡ Xem tốc độ phản hồi của Bot và Discord API.' },
+                            { name: 'Lệnh `/serverinfo`', value: '📊 Xem chi tiết ngày tạo, chủ sở hữu, số lượng thành viên của Server.' },
+                            { name: 'Lệnh `/userinfo [target]`', value: '👤 Xem chi tiết thông tin tài khoản, ngày tham gia của thành viên.' }
+                        )
+                        .setFooter({ text: 'Danh mục: Tiện ích' })
+                        .setTimestamp();
+                } 
+                else if (selection === 'menu_mod') {
+                    embed = new EmbedBuilder()
+                        .setColor('#E74C3C')
+                        .setTitle('🛡️ DANH MỤC QUẢN TRỊ')
+                        .setDescription('Lệnh hỗ trợ quản trị và dọn dẹp server cho các Admin.')
+                        .addFields(
+                            { name: 'Lệnh `/ban [thành_viên] [lý_do]`', value: '🚫 Ban thành viên ra khỏi server (Yêu cầu quyền Ban Members).' }
+                        )
+                        .setFooter({ text: 'Danh mục: Quản trị' })
+                        .setTimestamp();
+                } 
+                else if (selection === 'menu_help') {
+                    embed = new EmbedBuilder()
+                        .setColor('#E67E22')
+                        .setTitle('📖 HƯỚNG DẪN & TRỢ GIÚP')
+                        .setDescription('Nếu bạn gặp khó khăn khi sử dụng Gâu Gâu Bot, hãy tham khảo các chỉ dẫn sau:')
+                        .addFields(
+                            { name: '💡 Lưu ý về Nhạc', value: 'Bạn phải ở cùng phòng voice với bot thì mới có thể điều khiển hoặc nghe nhạc.' },
+                            { name: '🚀 Khắc phục lỗi', value: 'Nếu bot gặp hiện tượng mất kết nối hoặc không phản hồi, hãy thử dùng `/stop` rồi `/play` lại.' }
+                        )
+                        .setFooter({ text: 'Danh mục: Trợ giúp' })
+                        .setTimestamp();
+                }
+
+                // Giữ lại select menu để người dùng có thể chuyển mục liên tục
+                const selectMenu = new StringSelectMenuBuilder()
+                    .setCustomId('menu_select')
+                    .setPlaceholder('Chọn danh mục chức năng khác tại đây...')
+                    .addOptions([
+                        {
+                            label: 'Điều khiển Âm Nhạc',
+                            description: 'Xem lệnh và điều khiển phát nhạc YouTube',
+                            value: 'menu_music',
+                            emoji: '🎵'
+                        },
+                        {
+                            label: 'Thông tin & Tiện ích',
+                            description: 'Xem thông tin server, thành viên, đo độ trễ',
+                            value: 'menu_info',
+                            emoji: '📊'
+                        },
+                        {
+                            label: 'Công cụ Quản trị',
+                            description: 'Các chức năng ban/kick thành viên',
+                            value: 'menu_mod',
+                            emoji: '🛡️'
+                        },
+                        {
+                            label: 'Hướng dẫn & Trợ giúp',
+                            description: 'Xem toàn bộ phím tắt và hướng dẫn sử dụng',
+                            value: 'menu_help',
+                            emoji: '📖'
+                        }
+                    ]);
+
+                const menuRow = new ActionRowBuilder().addComponents(selectMenu);
+                rows.unshift(menuRow);
+
+                await interaction.update({ embeds: [embed], components: rows });
+            }
+        }
+
+        if (interaction.isButton()) {
+            const { customId } = interaction;
+            if (customId === 'btn_stop') {
+                const activeConn = voiceConnections.get(interaction.guildId);
+                if (!activeConn) {
+                    return interaction.reply({ content: '❌ Bot hiện không phát nhạc hoặc không ở trong kênh thoại nào!', ephemeral: true });
+                }
+
+                try {
+                    if (activeConn.ytProcess) {
+                        activeConn.ytProcess.kill();
+                    }
+                    activeConn.player.stop();
+                    activeConn.connection.destroy();
+                    voiceConnections.delete(interaction.guildId);
+                    await interaction.reply({ content: '⏹️ Đã dừng phát nhạc và rời khỏi kênh thoại bằng nút bấm điều khiển!' });
+                } catch (error) {
+                    console.error('❌ Lỗi khi dừng phát nhạc bằng nút bấm:', error);
+                    await interaction.reply({ content: '❌ Có lỗi xảy ra khi dừng phát nhạc!', ephemeral: true });
+                }
+            }
+        }
+    } catch (e) {
+        console.error('❌ Lỗi trong Component Interaction Listener:', e);
     }
 });
 
