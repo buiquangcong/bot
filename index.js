@@ -1,13 +1,21 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, REST, Routes, ActivityType, Events, PermissionFlagsBits } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus } = require('@discordjs/voice');
+const play = require('play-dl');
 
 // Khởi tạo client với các quyền (Intents) cần thiết
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
     ]
 });
+
+// Bộ lưu trữ kết nối âm thanh và đầu phát nhạc
+const voiceConnections = new Map();
 
 // Định nghĩa danh sách Slash Commands
 const commands = [
@@ -34,6 +42,40 @@ const commands = [
     {
         name: 'help',
         description: 'Hiển thị danh sách các lệnh hỗ trợ 📖',
+    },
+    {
+        name: 'play',
+        description: 'Phát nhạc từ link YouTube vào phòng thoại của bạn 🎵',
+        options: [
+            {
+                name: 'url',
+                type: 3, // STRING type
+                description: 'Liên kết YouTube (video) để phát',
+                required: true
+            }
+        ]
+    },
+    {
+        name: 'stop',
+        description: 'Dừng phát nhạc và rời khỏi phòng thoại ⏹️',
+    },
+    {
+        name: 'ban',
+        description: 'Trục xuất (Ban) thành viên ra khỏi server 🚫',
+        options: [
+            {
+                name: 'target',
+                type: 6, // USER type
+                description: 'Thành viên muốn trục xuất',
+                required: true
+            },
+            {
+                name: 'reason',
+                type: 3, // STRING type
+                description: 'Lý do trục xuất',
+                required: false
+            }
+        ]
     }
 ];
 
@@ -204,12 +246,145 @@ client.on('interactionCreate', async interaction => {
                     { name: '`/ping`', value: '⚡ Xem độ phản hồi của bot.' },
                     { name: '`/serverinfo`', value: '📊 Hiển thị thông tin chi tiết về Server này.' },
                     { name: '`/userinfo [thành_viên]`', value: '👤 Xem chi tiết thông tin và ngày tham gia của thành viên.' },
+                    { name: '`/play [link_youtube]`', value: '🎵 Tham gia kênh voice và phát nhạc từ YouTube.' },
+                    { name: '`/stop`', value: '⏹️ Dừng nhạc và rời kênh voice.' },
+                    { name: '`/ban [thành_viên] [lý_do]`', value: '🚫 Trục xuất một thành viên ra khỏi server.' },
                     { name: '`/help`', value: '📖 Xem lại bảng hướng dẫn này.' }
                 )
                 .setFooter({ text: 'Phiên bản cải tiến bởi Antigravity' })
                 .setTimestamp();
                 
             await interaction.reply({ embeds: [embed] });
+        }
+
+        else if (commandName === 'play') {
+            const url = interaction.options.getString('url');
+            const voiceChannel = interaction.member.voice.channel;
+
+            if (!voiceChannel) {
+                return interaction.reply({ content: '❌ Bạn phải tham gia một phòng thoại trước!', ephemeral: true });
+            }
+
+            const ytValidate = await play.yt_validate(url);
+            if (!ytValidate || ytValidate !== 'video') {
+                return interaction.reply({ content: '❌ Vui lòng cung cấp một liên kết video YouTube hợp lệ!', ephemeral: true });
+            }
+
+            await interaction.deferReply();
+
+            try {
+                // Tham gia kênh thoại
+                const connection = joinVoiceChannel({
+                    channelId: voiceChannel.id,
+                    guildId: interaction.guildId,
+                    adapterCreator: interaction.guild.voiceAdapterCreator,
+                });
+
+                // Lấy stream âm thanh từ YouTube
+                const stream = await play.stream(url);
+                const resource = createAudioResource(stream.stream, {
+                    inputType: stream.type
+                });
+
+                // Khởi tạo player
+                const player = createAudioPlayer();
+                player.play(resource);
+                connection.subscribe(player);
+
+                // Lấy thông tin video cơ bản
+                const videoInfo = await play.video_basic_info(url);
+                const videoTitle = videoInfo.video_details.title;
+                const videoDuration = videoInfo.video_details.durationRaw;
+                const videoThumbnail = videoInfo.video_details.thumbnails[0]?.url;
+
+                // Lưu connection và player vào map
+                voiceConnections.set(interaction.guildId, { connection, player });
+
+                // Xử lý khi connection bị ngắt hoặc hủy
+                connection.on(VoiceConnectionStatus.Disconnected, () => {
+                    player.stop();
+                    connection.destroy();
+                    voiceConnections.delete(interaction.guildId);
+                });
+
+                const embed = new EmbedBuilder()
+                    .setColor('#2ECC71')
+                    .setTitle('🎵 Đang phát nhạc từ YouTube')
+                    .setDescription(`**[${videoTitle}](${url})**`)
+                    .setThumbnail(videoThumbnail)
+                    .addFields(
+                        { name: '⏱️ Thời lượng', value: `\`${videoDuration}\``, inline: true },
+                        { name: '🎤 Kênh thoại', value: `<#${voiceChannel.id}>`, inline: true }
+                    )
+                    .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` })
+                    .setTimestamp();
+
+                await interaction.editReply({ embeds: [embed] });
+
+            } catch (error) {
+                console.error('❌ Lỗi khi phát nhạc:', error);
+                await interaction.editReply({ content: '❌ Gặp lỗi trong quá trình kết nối hoặc lấy stream từ YouTube!' });
+            }
+        }
+
+        else if (commandName === 'stop') {
+            const activeConn = voiceConnections.get(interaction.guildId);
+            if (!activeConn) {
+                return interaction.reply({ content: '❌ Bot hiện không phát nhạc hoặc không ở trong kênh thoại nào!', ephemeral: true });
+            }
+
+            try {
+                activeConn.player.stop();
+                activeConn.connection.destroy();
+                voiceConnections.delete(interaction.guildId);
+                await interaction.reply({ content: '⏹️ Đã dừng phát nhạc và rời khỏi kênh thoại!' });
+            } catch (error) {
+                console.error('❌ Lỗi khi dừng phát nhạc:', error);
+                await interaction.reply({ content: '❌ Có lỗi xảy ra khi dừng phát nhạc!', ephemeral: true });
+            }
+        }
+
+        else if (commandName === 'ban') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+                return interaction.reply({ content: '❌ Bạn không có quyền trục xuất thành viên!', ephemeral: true });
+            }
+
+            if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.BanMembers)) {
+                return interaction.reply({ content: '❌ Bot không có quyền trục xuất thành viên trong server này! Vui lòng cấp quyền cho bot.', ephemeral: true });
+            }
+
+            const targetUser = interaction.options.getUser('target');
+            const reason = interaction.options.getString('reason') || 'Không có lý do.';
+
+            const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+
+            if (targetMember) {
+                if (!targetMember.bannable) {
+                    return interaction.reply({ content: '❌ Không thể trục xuất thành viên này! Có thể họ có vai trò (Role) cao hơn bot.', ephemeral: true });
+                }
+            }
+
+            await interaction.deferReply();
+
+            try {
+                await interaction.guild.members.ban(targetUser.id, { reason });
+                
+                const embed = new EmbedBuilder()
+                    .setColor('#E74C3C')
+                    .setTitle('🚫 Trục xuất thành viên thành công')
+                    .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+                    .addFields(
+                        { name: '👤 Thành viên', value: `${targetUser.tag} (<@${targetUser.id}>)`, inline: true },
+                        { name: '🛡️ Người thực hiện', value: `${interaction.user.tag} (<@${interaction.user.id}>)`, inline: true },
+                        { name: '📝 Lý do', value: `\`${reason}\``, inline: false }
+                    )
+                    .setTimestamp();
+
+                await interaction.editReply({ embeds: [embed] });
+            } catch (error) {
+                console.error('❌ Lỗi khi thực hiện lệnh ban:', error);
+                await interaction.editReply({ content: '❌ Gặp lỗi khi cố gắng ban thành viên này!' });
+            }
         }
     } catch (error) {
         console.error(`❌ Lỗi khi xử lý lệnh ${commandName}:`, error);
