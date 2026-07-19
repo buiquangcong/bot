@@ -1,7 +1,10 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, REST, Routes, ActivityType, Events, PermissionFlagsBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus } = require('@discordjs/voice');
-const play = require('play-dl');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, VoiceConnectionStatus, StreamType } = require('@discordjs/voice');
+const { spawn, execFile } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
 
 // Khởi tạo client với các quyền (Intents) cần thiết
 const client = new Client({
@@ -16,6 +19,106 @@ const client = new Client({
 
 // Bộ lưu trữ kết nối âm thanh và đầu phát nhạc
 const voiceConnections = new Map();
+
+// Hàm tách ID video từ URL YouTube
+function getYouTubeVideoId(url) {
+    if (!url || typeof url !== 'string') return null;
+    const regExp = /^https?:\/\/(?:(?:www|music)\.)?(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|watch\?.*v=|shorts\/)|youtu\.be\/)([^"&?\/ ]{11})/;
+    const match = url.match(regExp);
+    return match ? match[1] : null;
+}
+
+// Lấy đường dẫn chạy file binary yt-dlp
+function getYtDlpPath() {
+    const isWin = process.platform === 'win32';
+    const binaryName = isWin ? 'yt-dlp.exe' : 'yt-dlp';
+    return path.join(__dirname, binaryName);
+}
+
+// Tự động tải yt-dlp nếu chưa tồn tại
+function ensureYtDlp() {
+    return new Promise((resolve, reject) => {
+        const binPath = getYtDlpPath();
+        if (fs.existsSync(binPath)) {
+            return resolve(binPath);
+        }
+        
+        console.log(`🤖 Tự động tải yt-dlp cho hệ điều hành ${process.platform}...`);
+        const isWin = process.platform === 'win32';
+        const url = isWin 
+            ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+            : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+            
+        function download(downloadUrl) {
+            https.get(downloadUrl, (response) => {
+                if (response.statusCode === 302 || response.statusCode === 301) {
+                    download(response.headers.location);
+                    return;
+                }
+                
+                if (response.statusCode !== 200) {
+                    return reject(new Error(`Tải yt-dlp thất bại: Mã trạng thái ${response.statusCode}`));
+                }
+                
+                const file = fs.createWriteStream(binPath);
+                response.pipe(file);
+                
+                file.on('finish', () => {
+                    file.close();
+                    if (!isWin) {
+                        fs.chmodSync(binPath, '755');
+                    }
+                    console.log('✅ Đã tải và cấu hình thành công yt-dlp!');
+                    resolve(binPath);
+                });
+                
+                file.on('error', (err) => {
+                    fs.unlink(binPath, () => {});
+                    reject(err);
+                });
+            }).on('error', reject);
+        }
+        
+        download(url);
+    });
+}
+
+// Định dạng giây thành chuỗi mm:ss / hh:mm:ss
+function formatDuration(seconds) {
+    if (!seconds) return '00:00';
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    let result = '';
+    if (hrs > 0) {
+        result += `${hrs.toString().padStart(2, '0')}:`;
+    }
+    result += `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return result;
+}
+
+// Lấy thông tin metadata của video thông qua yt-dlp
+function getYouTubeMetadata(url) {
+    return new Promise((resolve, reject) => {
+        const binPath = getYtDlpPath();
+        execFile(binPath, ['--dump-json', '--js-runtimes', 'node', url], (error, stdout, stderr) => {
+            if (error) {
+                return reject(error);
+            }
+            try {
+                const metadata = JSON.parse(stdout);
+                resolve({
+                    title: metadata.title || 'YouTube Video',
+                    duration: formatDuration(metadata.duration),
+                    thumbnail: metadata.thumbnail || (metadata.thumbnails && metadata.thumbnails[0] ? metadata.thumbnails[0].url : '')
+                });
+            } catch (e) {
+                reject(e);
+            }
+        });
+    });
+}
 
 // Định nghĩa danh sách Slash Commands
 const commands = [
@@ -103,6 +206,13 @@ function findWelcomeChannel(guild) {
 // Khi bot sẵn sàng hoạt động
 client.once(Events.ClientReady, async () => {
     console.log(`🤖 Bot ${client.user.tag} đã online và sẵn sàng hoạt động!`);
+    
+    // Đảm bảo yt-dlp đã được tải và sẵn sàng
+    try {
+        await ensureYtDlp();
+    } catch (err) {
+        console.error('❌ Lỗi khi tự động tải yt-dlp:', err);
+    }
     
     // Thiết lập trạng thái hoạt động xịn sò
     client.user.setActivity('thành viên mới 🌟', { type: ActivityType.Watching });
@@ -265,14 +375,30 @@ client.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: '❌ Bạn phải tham gia một phòng thoại trước!', ephemeral: true });
             }
 
-            const ytValidate = await play.yt_validate(url);
-            if (!ytValidate || ytValidate !== 'video') {
+            const videoId = getYouTubeVideoId(url);
+            if (!videoId) {
                 return interaction.reply({ content: '❌ Vui lòng cung cấp một liên kết video YouTube hợp lệ!', ephemeral: true });
             }
 
             await interaction.deferReply();
 
+            // Nếu đang phát, dọn dẹp kết nối cũ trước
+            const oldConn = voiceConnections.get(interaction.guildId);
+            if (oldConn) {
+                try {
+                    if (oldConn.ytProcess) oldConn.ytProcess.kill();
+                    oldConn.player.stop();
+                    oldConn.connection.destroy();
+                    voiceConnections.delete(interaction.guildId);
+                } catch (e) {
+                    console.error('Lỗi dọn dẹp kết nối cũ:', e);
+                }
+            }
+
             try {
+                // Đảm bảo yt-dlp đã được tải
+                const binPath = await ensureYtDlp();
+
                 // Tham gia kênh thoại
                 const connection = joinVoiceChannel({
                     channelId: voiceChannel.id,
@@ -280,10 +406,28 @@ client.on('interactionCreate', async interaction => {
                     adapterCreator: interaction.guild.voiceAdapterCreator,
                 });
 
-                // Lấy stream âm thanh từ YouTube
-                const stream = await play.stream(url);
-                const resource = createAudioResource(stream.stream, {
-                    inputType: stream.type
+                // Spawning yt-dlp to stream audio
+                const ytProcess = spawn(binPath, [
+                    '-o', '-',
+                    '-f', 'bestaudio',
+                    '--no-playlist',
+                    '--js-runtimes', 'node',
+                    url
+                ]);
+
+                ytProcess.on('error', err => {
+                    console.error('❌ Lỗi khi khởi động tiến trình yt-dlp:', err);
+                });
+
+                // Ghi nhận lỗi từ stderr của yt-dlp để debug
+                ytProcess.stderr.on('data', data => {
+                    const msg = data.toString().trim();
+                    if (msg) console.log(`[yt-dlp stderr]: ${msg}`);
+                });
+
+                // Create audio resource from stdout
+                const resource = createAudioResource(ytProcess.stdout, {
+                    inputType: StreamType.Arbitrary
                 });
 
                 // Khởi tạo player
@@ -291,35 +435,57 @@ client.on('interactionCreate', async interaction => {
                 player.play(resource);
                 connection.subscribe(player);
 
-                // Lấy thông tin video cơ bản
-                const videoInfo = await play.video_basic_info(url);
-                const videoTitle = videoInfo.video_details.title;
-                const videoDuration = videoInfo.video_details.durationRaw;
-                const videoThumbnail = videoInfo.video_details.thumbnails[0]?.url;
+                player.on('error', error => {
+                    console.error('❌ Lỗi Audio Player:', error.message);
+                });
 
-                // Lưu connection và player vào map
-                voiceConnections.set(interaction.guildId, { connection, player });
+                // Lưu connection, player và ytProcess vào map
+                voiceConnections.set(interaction.guildId, { connection, player, ytProcess });
 
                 // Xử lý khi connection bị ngắt hoặc hủy
                 connection.on(VoiceConnectionStatus.Disconnected, () => {
+                    try {
+                        ytProcess.kill();
+                    } catch (e) {}
                     player.stop();
                     connection.destroy();
                     voiceConnections.delete(interaction.guildId);
                 });
 
-                const embed = new EmbedBuilder()
-                    .setColor('#2ECC71')
-                    .setTitle('🎵 Đang phát nhạc từ YouTube')
-                    .setDescription(`**[${videoTitle}](${url})**`)
-                    .setThumbnail(videoThumbnail)
+                // Gửi tin nhắn phản hồi ban đầu nhanh chóng
+                const initialEmbed = new EmbedBuilder()
+                    .setColor('#3498DB')
+                    .setTitle('🎵 Đang chuẩn bị phát nhạc...')
+                    .setDescription(`**[Video YouTube](${url})**`)
                     .addFields(
-                        { name: '⏱️ Thời lượng', value: `\`${videoDuration}\``, inline: true },
+                        { name: '⏱️ Thời lượng', value: '`Đang tải...`', inline: true },
                         { name: '🎤 Kênh thoại', value: `<#${voiceChannel.id}>`, inline: true }
                     )
-                    .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` })
+                    .setFooter({ text: 'Yêu cầu đang được xử lý...' })
                     .setTimestamp();
 
-                await interaction.editReply({ embeds: [embed] });
+                await interaction.editReply({ embeds: [initialEmbed] });
+
+                // Lấy thông tin video cơ bản trong background để không chặn phát nhạc
+                getYouTubeMetadata(url).then(metadata => {
+                    const embed = new EmbedBuilder()
+                        .setColor('#2ECC71')
+                        .setTitle('🎵 Đang phát nhạc từ YouTube')
+                        .setDescription(`**[${metadata.title}](${url})**`)
+                        .setThumbnail(metadata.thumbnail)
+                        .addFields(
+                            { name: '⏱️ Thời lượng', value: `\`${metadata.duration}\``, inline: true },
+                            { name: '🎤 Kênh thoại', value: `<#${voiceChannel.id}>`, inline: true }
+                        )
+                        .setFooter({ text: `Yêu cầu bởi ${interaction.user.tag}` })
+                        .setTimestamp();
+
+                    interaction.editReply({ content: null, embeds: [embed] }).catch(err => {
+                        console.error('Error editing interaction reply:', err);
+                    });
+                }).catch(err => {
+                    console.error('❌ Lỗi khi lấy metadata video:', err);
+                });
 
             } catch (error) {
                 console.error('❌ Lỗi khi phát nhạc:', error);
@@ -334,6 +500,9 @@ client.on('interactionCreate', async interaction => {
             }
 
             try {
+                if (activeConn.ytProcess) {
+                    activeConn.ytProcess.kill();
+                }
                 activeConn.player.stop();
                 activeConn.connection.destroy();
                 voiceConnections.delete(interaction.guildId);
