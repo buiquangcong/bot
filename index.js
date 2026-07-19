@@ -105,7 +105,7 @@ function formatDuration(seconds) {
 function getYouTubeMetadata(url) {
     return new Promise((resolve, reject) => {
         const binPath = getYtDlpPath();
-        execFile(binPath, ['--dump-json', '--js-runtimes', 'node', url], { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+        execFile(binPath, ['--no-playlist', '--dump-json', '--js-runtimes', 'node', url], { maxBuffer: 100 * 1024 * 1024 }, (error, stdout, stderr) => {
             if (error) {
                 return reject(error);
             }
