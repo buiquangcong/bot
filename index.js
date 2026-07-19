@@ -407,6 +407,8 @@ client.on('interactionCreate', async interaction => {
                     channelId: voiceChannel.id,
                     guildId: interaction.guildId,
                     adapterCreator: interaction.guild.voiceAdapterCreator,
+                    selfDeaf: true,
+                    selfMute: false
                 });
 
                 // Spawning yt-dlp to stream audio
